@@ -31,6 +31,8 @@ type ClientBind struct {
 	connectAddr         netip.AddrPort
 	reserved            [3]uint8
 	parseReserved       bool
+
+	receiveHook func()
 }
 
 func NewClientBind(ctx context.Context, errorHandler E.Handler, dialer N.Dialer, isConnect bool, connectAddr netip.AddrPort, reserved [3]uint8) *ClientBind {
@@ -98,6 +100,12 @@ func (c *ClientBind) receive(packets [][]byte, sizes []int, eps []conn.Endpoint)
 		return
 	}
 	n, addr, err := udpConn.ReadFrom(packets[0])
+	if err == nil && c.receiveHook != nil {
+		// Any datagram proves the path still carries traffic; keepalives alone
+		// go quiet while the session is busy, so the watchdog must not read
+		// their absence as death.
+		c.receiveHook()
+	}
 	if err != nil {
 		_ = udpConn.Close()
 		if !c.closed.Load() {
@@ -116,6 +124,12 @@ func (c *ClientBind) receive(packets [][]byte, sizes []int, eps []conn.Endpoint)
 	eps[0] = Endpoint(M.AddrPortFromNet(addr))
 	count = 1
 	return
+}
+
+// SetReceiveHook registers a callback that runs after every datagram read from
+// the transport socket. It must be set before Open and must not block.
+func (c *ClientBind) SetReceiveHook(hook func()) {
+	c.receiveHook = hook
 }
 
 func (c *ClientBind) Close() error {
